@@ -1,0 +1,35 @@
+{
+    "version": 1,
+    "name": "GamePlay",
+    "maps": [
+        {
+            "name": "Gameplay",
+            "id": "3b0e883f-9ac8-406a-b83e-a376314ee4a4",
+            "actions": [
+                {
+                    "name": "Move Object",
+                    "type": "Value",
+                    "id": "e4f13822-a00c-4aa2-b5f2-baf01bc6b5cf",
+                    "expectedControlType": "Vector2",
+                    "processors": "",
+                    "interactions": "",
+                    "initialStateCheck": true
+                }
+            ],
+            "bindings": [
+                {
+                    "name": "",
+                    "id": "9bed3163-d821-4a8f-a59b-a700de0f44ed",
+                    "path": "<Mouse>/leftButton",
+                    "interactions": "Hold",
+                    "processors": "",
+                    "groups": "",
+                    "action": "Move Object",
+                    "isComposite": false,
+                    "isPartOfComposite": false
+                }
+            ]
+        }
+    ],
+    "controlSchemes": []
+}
