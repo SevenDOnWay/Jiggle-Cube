@@ -7,7 +7,7 @@ public class GridManager : MonoBehaviour {
 
     PlayScreen playScreen;
 
-    float squareSize;
+    float squareSize = 1f;
 
     GridCell[,] grid;
     readonly List<JellyCube> placedJellies = new List<JellyCube>();
@@ -18,41 +18,48 @@ public class GridManager : MonoBehaviour {
     const int maxWidth = 6;
     const int maxHeight = 6;
 
-    [SerializeField] int cellSlotResolution = 2;
-    [SerializeField] int minimumConnectionSize = 3;
     [SerializeField] bool clearConnectedJellies = true;
+    [SerializeField] int minimumConnectionSize = 2;
     [SerializeField] List<Vector2Int> blockedCells = new List<Vector2Int>();
+    [SerializeField] LevelSO startingLevel;
+    [SerializeField] CubeColorSO colorPalette;
+    [SerializeField] JellyCubeFactory jellyCubeFactory;
+    [SerializeField] Transform jellyParent;
+    readonly List<GameObject> spawnedCellVisuals = new List<GameObject>();  
+
+    public int Width => maxWidth;
+    public int Height => maxHeight;
+    public LevelSO StartingLevel => startingLevel;
+    public float CellVisualZOffset => GetCellVisualZOffset();
 
     [Inject]
-    public void Construct(PlayScreen playScreen) {
+    public void Construct(PlayScreen playScreen, JellyCubeFactory jellyCubeFactory) {
         this.playScreen = playScreen;
+        this.jellyCubeFactory = jellyCubeFactory;
     }
 
     public void Start() {
-        squareSize = playScreen.squareSize;
-        EnsureGridLoaded();
     }
 
-    // TODO: replace blockedCells with a LevelSO once level authoring is ready.
-    public void LoadNewLevel() {
-        grid = new GridCell[maxWidth, maxHeight];
-        placedJellies.Clear();
-
-        for (int x = 0; x < maxWidth; x++) {
-            for (int y = 0; y < maxHeight; y++) {
-                grid[x, y] = new GridCell(new Vector2Int(x, y));
-            }
+    public void BuildGrid(LevelSO level = null) {
+        if (playScreen != null) {
+            squareSize = playScreen.squareSize;
+            transform.position = playScreen.GridCenter;
         }
 
-        for (int i = 0; i < blockedCells.Count; i++) {
-            Vector2Int blockedPosition = blockedCells[i];
+        InitializeEmptyGrid(level != null ? level : startingLevel);
+    }
 
-            if (!IsInsideGrid(blockedPosition)) {
-                continue;
-            }
+    
+    //TODO: Use LevelSO to load level
+    public void LoadLevel(LevelSO level, CubeColorSO palette) {
+        colorPalette = palette;
+        //LoadLevel(level);
+    }
 
-            grid[blockedPosition.x, blockedPosition.y].SetBlocked(true);
-        }
+    public GridCell GetCell(Vector2Int position) {
+        EnsureGridLoaded();
+        return IsInsideGrid(position) ? grid[position.x, position.y] : null;
     }
 
     public bool CanPlaceCell(IReadOnlyList<JellyCube> jellies, Vector2Int cellPosition) {
@@ -76,7 +83,7 @@ public class GridManager : MonoBehaviour {
         }
 
         GridCell targetCell = grid[cellPosition.x, cellPosition.y];
-        return targetCell.CanAcceptJelly;
+        return CanCellAcceptJellies(targetCell, jellies);
     }
 
     public bool TryPlaceCell(IReadOnlyList<JellyCube> jellies, Vector2Int cellPosition) {
@@ -95,7 +102,6 @@ public class GridManager : MonoBehaviour {
 
             RemoveJellyFromCurrentCell(jelly);
             jelly.cellPos = cellPosition;
-            jelly.transform.position = GridToWorldPosition(cellPosition);
 
             if (!placedJellies.Contains(jelly)) {
                 placedJellies.Add(jelly);
@@ -103,8 +109,13 @@ public class GridManager : MonoBehaviour {
         }
 
         targetCell.SetJellies(jellies);
+        GetFactory().LayoutJelliesInCell(targetCell.Cubes, GridToWorldPosition(cellPosition));
         CheckConnect(cellPosition);
         return true;
+    }
+
+    public bool TryPlacePiece(JellyPiece piece, Vector2Int cellPosition) {
+        return piece != null && TryPlaceCell(piece.Jellies, cellPosition);
     }
 
     public bool TryPlaceCube() {
@@ -118,6 +129,58 @@ public class GridManager : MonoBehaviour {
         }
 
         return TryPlaceCell(new List<JellyCube> { jelly }, cellPosition);
+    }
+    
+
+    //Entry point: conttroller
+
+    public bool TryPlaceCubeAtWorldPosition(JellyCube jelly, Vector3 worldPosition) {
+        if (jelly == null || !TryGetCellPosition(worldPosition, out Vector2Int cellPosition)) {
+            return false;
+        }
+
+        return TryPlaceCube(jelly, cellPosition);
+    }
+
+    public bool TryPlaceCubeAtScreenPosition(JellyCube jelly, Vector2 screenPosition, Camera camera) {
+        if (jelly == null || camera == null) {
+            return false;
+        }
+
+        Ray ray = camera.ScreenPointToRay(screenPosition);
+        Plane cellPlane = new Plane(Vector3.forward, transform.position + Vector3.forward * GetCellVisualZOffset());
+
+        if (!cellPlane.Raycast(ray, out float enter)) {
+            return false;
+        }
+
+        return TryPlaceCubeAtWorldPosition(jelly, ray.GetPoint(enter));
+    }
+
+    public bool TryGetCellPosition(Vector3 worldPosition, out Vector2Int cellPosition) {
+        EnsureGridLoaded();
+
+        float step = GetGridStep();
+        float halfCellSize = GetCellVisualSize() * 0.5f;
+        Vector3 localPosition = worldPosition - transform.position;
+        Vector2 centerOffset = GetGridCenterOffset();
+
+        cellPosition = new Vector2Int(
+            Mathf.RoundToInt(localPosition.x / step + centerOffset.x),
+            Mathf.RoundToInt(localPosition.y / step + centerOffset.y)
+        );
+
+        if (!IsInsideGrid(cellPosition)) {
+            return false;
+        }
+
+        Vector2 cellCenter = new Vector2(
+            (cellPosition.x - centerOffset.x) * step,
+            (cellPosition.y - centerOffset.y) * step
+        );
+        Vector2 deltaFromCenter = new Vector2(localPosition.x, localPosition.y) - cellCenter;
+
+        return Mathf.Abs(deltaFromCenter.x) <= halfCellSize && Mathf.Abs(deltaFromCenter.y) <= halfCellSize;
     }
 
     public void CheckConnect(Vector2Int pos) {
@@ -247,7 +310,15 @@ public class GridManager : MonoBehaviour {
     }
 
     bool CanConnect(JellyCube first, JellyCube second) {
-        return first != null && second != null && first != second && first.color == second.color;
+        if (first == null || second == null || first == second) {
+            return false;
+        }
+
+        //if (!string.IsNullOrEmpty(first.colorId) || !string.IsNullOrEmpty(second.colorId)) {
+        //    return first.colorId == second.colorId;
+        //}
+
+        return first.color == second.color;
     }
 
     bool TouchesInsideSameCell(JellyCube first, JellyCube second) {
@@ -270,10 +341,11 @@ public class GridManager : MonoBehaviour {
     bool TouchesAcrossCells(JellyCube currentJelly, JellyCube otherJelly, int directionIndex) {
         IReadOnlyList<Vector2Int> currentSlots = GetOccupiedSlots(currentJelly);
         IReadOnlyList<Vector2Int> otherSlots = GetOccupiedSlots(otherJelly);
+        int slotResolution = GetCellSlotResolution();
 
         for (int i = 0; i < currentSlots.Count; i++) {
             for (int j = 0; j < otherSlots.Count; j++) {
-                if (SlotsTouchAcrossCells(currentSlots[i], otherSlots[j], directionIndex)) {
+                if (SlotsTouchAcrossCells(currentSlots[i], otherSlots[j], directionIndex, slotResolution, slotResolution)) {
                     return true;
                 }
             }
@@ -282,21 +354,25 @@ public class GridManager : MonoBehaviour {
         return false;
     }
 
-    bool SlotsTouchAcrossCells(Vector2Int currentSlot, Vector2Int otherSlot, int directionIndex) {
+    bool SlotsTouchAcrossCells(Vector2Int currentSlot, Vector2Int otherSlot, int directionIndex, int currentResolution, int otherResolution) {
+        if (currentResolution != otherResolution) {
+            return false;
+        }
+
         if (directionIndex == 0) {
-            return currentSlot.y == cellSlotResolution - 1 && otherSlot.y == 0 && currentSlot.x == otherSlot.x;
+            return currentSlot.y == currentResolution - 1 && otherSlot.y == 0 && currentSlot.x == otherSlot.x;
         }
 
         if (directionIndex == 1) {
-            return currentSlot.x == 0 && otherSlot.x == cellSlotResolution - 1 && currentSlot.y == otherSlot.y;
+            return currentSlot.x == 0 && otherSlot.x == otherResolution - 1 && currentSlot.y == otherSlot.y;
         }
 
         if (directionIndex == 2) {
-            return currentSlot.y == 0 && otherSlot.y == cellSlotResolution - 1 && currentSlot.x == otherSlot.x;
+            return currentSlot.y == 0 && otherSlot.y == otherResolution - 1 && currentSlot.x == otherSlot.x;
         }
 
         if (directionIndex == 3) {
-            return currentSlot.x == cellSlotResolution - 1 && otherSlot.x == 0 && currentSlot.y == otherSlot.y;
+            return currentSlot.x == currentResolution - 1 && otherSlot.x == 0 && currentSlot.y == otherSlot.y;
         }
 
         return false;
@@ -316,16 +392,116 @@ public class GridManager : MonoBehaviour {
 
             RemoveJellyFromCurrentCell(jelly);
             placedJellies.Remove(jelly);
-            Destroy(jelly.gameObject);
+            DestroyJelly(jelly);
         }
     }
 
+    void InitializeEmptyGrid(LevelSO level) {
+        ClearRuntimeJellies();
+
+        grid = new GridCell[maxWidth, maxHeight];
+
+        for (int x = 0; x < maxWidth; x++) {
+            for (int y = 0; y < maxHeight; y++) {
+                grid[x, y] = new GridCell(new Vector2Int(x, y));
+            }
+        }
+
+        ApplyBlockedCells(level);
+    }
+
+    void ApplyBlockedCells(LevelSO level) {
+        if (level != null && level.blockedCells != null) {
+            for (int i = 0; i < level.blockedCells.Count; i++) {
+                SetBlockedCell(level.blockedCells[i]);
+            }
+
+            return;
+        }
+
+        for (int i = 0; i < blockedCells.Count; i++) {
+            SetBlockedCell(blockedCells[i]);
+        }
+    }
+
+    void SetBlockedCell(Vector2Int position) {
+        if (IsInsideGrid(position)) {
+            grid[position.x, position.y].SetBlocked(true);
+        }
+    }
+
+    void ClearRuntimeJellies() {
+        for (int i = placedJellies.Count - 1; i >= 0; i--) {
+            JellyCube jelly = placedJellies[i];
+
+            if (jelly != null) {
+                DestroyJelly(jelly);
+            }
+        }
+
+        placedJellies.Clear();
+    }
+
+    public void AddCellVisual(GameObject cellVisual) {
+        if (cellVisual != null && !spawnedCellVisuals.Contains(cellVisual)) {
+            spawnedCellVisuals.Add(cellVisual);
+        }
+    }
+
+    public void ClearGridVisualCells() {
+        for (int i = spawnedCellVisuals.Count - 1; i >= 0; i--) {
+            GameObject cellVisual = spawnedCellVisuals[i];
+
+            if (cellVisual == null) {
+                continue;
+            }
+
+            if (Application.isPlaying) {
+                Destroy(cellVisual);
+            } else {
+                DestroyImmediate(cellVisual);
+            }
+        }
+
+        spawnedCellVisuals.Clear();
+    }
+
     void RemoveJellyFromCurrentCell(JellyCube jelly) {
-        if (jelly == null || !IsInsideGrid(jelly.cellPos)) {
+        if (jelly == null || !IsInsideGrid(jelly.cellPos) || grid == null) {
             return;
         }
 
         grid[jelly.cellPos.x, jelly.cellPos.y].RemoveJelly(jelly);
+    }
+
+    bool CanCellAcceptJellies(GridCell cell, IReadOnlyList<JellyCube> jellies) {
+        if (cell == null || !cell.IsPlayable) {
+            return false;
+        }
+
+        for (int i = 0; i < cell.Cubes.Count; i++) {
+            JellyCube existingJelly = cell.Cubes[i];
+
+            if (existingJelly != null && !ContainsJelly(jellies, existingJelly)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    bool ContainsJelly(IReadOnlyList<JellyCube> jellies, JellyCube jelly) {
+        if (jellies == null || jelly == null) {
+            return false;
+        }
+
+        for (int i = 0; i < jellies.Count; i++) {
+            if (jellies[i] == jelly) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     IReadOnlyList<Vector2Int> GetOccupiedSlots(JellyCube jelly) {
@@ -340,13 +516,57 @@ public class GridManager : MonoBehaviour {
         return position.x >= 0 && position.x < maxWidth && position.y >= 0 && position.y < maxHeight;
     }
 
-    Vector3 GridToWorldPosition(Vector2Int position) {
-        return new Vector3(position.x * squareSize, position.y * squareSize, 0f);
+    public Vector3 GridToWorldPosition(Vector2Int position) {
+        float size = GetGridStep();
+        Vector2 centerOffset = GetGridCenterOffset();
+        return transform.position + new Vector3((position.x - centerOffset.x) * size, (position.y - centerOffset.y) * size, 0f);
+    }
+
+    float GetGridStep() {
+        return playScreen != null ? playScreen.GridStep : GetCellVisualSize();
+    }
+
+    Vector2 GetGridCenterOffset() {
+        return new Vector2((maxWidth - 1) * 0.5f, (maxHeight - 1) * 0.5f);
+    }
+
+    float GetCellVisualSize() {
+        return playScreen != null ? playScreen.CellVisualSize : Mathf.Max(squareSize, 1f);
+    }
+
+    float GetCellVisualZOffset() {
+        return playScreen != null ? playScreen.CellVisualZOffset : GetCellVisualSize() * 0.5f;
+    }
+
+    int GetCellSlotResolution() {
+        return playScreen != null ? Mathf.Max(1, playScreen.CellSlotResolution) : 2;
+    }
+
+    JellyCubeFactory GetFactory() {
+        if (jellyCubeFactory != null) {
+            return jellyCubeFactory;
+        }
+
+        jellyCubeFactory = GetComponent<JellyCubeFactory>();
+
+        if (jellyCubeFactory == null) {
+            jellyCubeFactory = gameObject.AddComponent<JellyCubeFactory>();
+        }
+
+        return jellyCubeFactory;
+    }
+
+    void DestroyJelly(JellyCube jelly) {
+        if (Application.isPlaying) {
+            Destroy(jelly.gameObject);
+        } else {
+            DestroyImmediate(jelly.gameObject);
+        }
     }
 
     void EnsureGridLoaded() {
         if (grid == null) {
-            LoadNewLevel();
+            BuildGrid();
         }
     }
 }
