@@ -27,6 +27,17 @@
                     "action": "Move Object",
                     "isComposite": false,
                     "isPartOfComposite": false
+                },
+                {
+                    "name": "",
+                    "id": "7068777e-5373-4dc6-af67-001b648800b5",
+                    "path": "<Touchscreen>/position",
+                    "interactions": "Hold",
+                    "processors": "",
+                    "groups": "",
+                    "action": "Move Object",
+                    "isComposite": false,
+                    "isPartOfComposite": false
                 }
             ]
         }
