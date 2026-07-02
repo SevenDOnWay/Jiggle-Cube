@@ -45,8 +45,9 @@ public class SpawnManager : MonoBehaviour {
         for (int x = 0; x < gridManager.Width; x++) {
             for (int y = 0; y < gridManager.Height; y++) {
                 Vector2Int gridPosition = new Vector2Int(x, y);
+                var cell = gridManager.GetCell(gridPosition);
 
-                if (level != null && level.IsBlocked(gridPosition)) {
+                if (cell == null || !cell.IsPlayable) {
                     continue;
                 }
 
